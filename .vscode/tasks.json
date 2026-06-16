@@ -57,6 +57,29 @@
 			"command": "npm run check",
 			"group": "none",
 			"problemMatcher": []
+		},
+		{
+			"label": "Dev Server",
+			"type": "shell",
+			"command": "node tools/devserver.cjs",
+			"isBackground": true,
+			"group": "none",
+			"presentation": {
+				"reveal": "silent",
+				"panel": "dedicated"
+			},
+			"problemMatcher": {
+				"owner": "devserver",
+				"pattern": {
+					"regexp": "^\\[devserver\\] (.*)$",
+					"message": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "정적 서버를 시작했습니다",
+					"endsPattern": "http://"
+				}
+			}
 		}
 	]
 }
