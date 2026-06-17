@@ -24,13 +24,23 @@ const ADJACENT_OFFSETS = [
 	[0, -1],
 	[0, 1],
 ];
-const ENEMY_COUNT = 5;
 const NO_SELECTION = -1;
 const START_GOLD = 100;
 const START_LEVEL = 1;
-const ENEMY_MIN_ATTACHMENTS = 3;
-const ENEMY_MAX_ATTACHMENTS = 8;
 const ATTACHMENT_PART_INDICES = [1, 2, 3];
+const SCROLL_DRAG_THRESHOLD = 12;
+const DRAG_MODE_NONE = "none";
+const DRAG_MODE_PENDING = "pending";
+const DRAG_MODE_SCROLL = "scroll";
+const DRAG_MODE_ATTACH = "attach";
+const INVENTORY_COLUMNS = 2;
+const BATTLE_PHASE_FIGHTING = "fighting";
+const BATTLE_PHASE_FINISHED = "finished";
+const BEAM_SPEED_RATIO = 1.1;
+const FIRE_PERIOD = 0.8;
+const SHIP_MOVE_FREQUENCY = 1.6;
+const BEAM_WIDTH = 7;
+const BEAM_HEIGHT = 20;
 
 
 //==============================================================================
@@ -46,45 +56,62 @@ const AppTab = {
 
 //==============================================================================
 // 부품 정의 목록. (배열 인덱스가 부품 식별자로 사용된다.)
+// health/attack/speed 는 현재 MVP 전투(우주선 단위 체력)용.
+// durability/weaponRange/weaponDamage/fireInterval 은 부품 단위 전투(예정)용 데이터.
 //==============================================================================
 const PartDefinitions = [
 	{
 		name: "코어",
 		symbol: "C",
 		color: "#ffd24a",
+		price: 0,
 		health: 50,
 		attack: 0,
 		speed: 0,
-		price: 0,
+		durability: 100,
+		weaponRange: 0,
+		weaponDamage: 0,
+		fireInterval: 0,
 		maxAttachments: 8,
 	},
 	{
 		name: "무기",
 		symbol: "W",
 		color: "#ff5a5a",
+		price: 30,
 		health: 0,
 		attack: 10,
 		speed: 0,
-		price: 30,
+		durability: 20,
+		weaponRange: 3,
+		weaponDamage: 10,
+		fireInterval: 1.0,
 	},
 	{
 		name: "추진체",
 		symbol: "T",
 		color: "#56b6ff",
+		price: 20,
 		health: 0,
 		attack: 0,
 		speed: 5,
-		price: 20,
+		durability: 15,
+		weaponRange: 0,
+		weaponDamage: 0,
+		fireInterval: 0,
 	},
 	{
 		name: "장갑",
 		symbol: "A",
 		color: "#9aa3b2",
+		price: 25,
 		health: 20,
 		attack: 0,
 		speed: 0,
-		price: 25,
-		durability: 30,
+		durability: 40,
+		weaponRange: 0,
+		weaponDamage: 0,
+		fireInterval: 0,
 	},
 ];
 
@@ -201,32 +228,87 @@ function calculateStatsForGrid(grid) {
 
 
 //==============================================================================
-// 무작위 적 우주선 그리드 생성. (코어 중심으로 인접 칸에만 부착 → 연결성 보장)
+// 적 우주선 템플릿 목록. (유의미한 구성: 무기·추진체·장갑 의도적 배치)
+// 각 부품 항목은 [column, row, partIndex] 이며 코어(2,2)는 자동 배치된다.
+// partIndex: 1=무기, 2=추진체, 3=장갑.
+//==============================================================================
+const EnemyTemplates = [
+	{
+		name: "정찰함",
+		parts: [
+			[2, 1, 1],
+			[2, 3, 2],
+		],
+	},
+	{
+		name: "포격함",
+		parts: [
+			[2, 1, 1],
+			[1, 1, 1],
+			[3, 1, 1],
+			[2, 3, 2],
+		],
+	},
+	{
+		name: "돌격함",
+		parts: [
+			[2, 1, 1],
+			[2, 0, 1],
+			[2, 3, 2],
+			[2, 4, 2],
+		],
+	},
+	{
+		name: "균형함",
+		parts: [
+			[2, 1, 1],
+			[1, 1, 1],
+			[2, 3, 2],
+			[1, 2, 3],
+			[3, 2, 3],
+		],
+	},
+	{
+		name: "중장갑함",
+		parts: [
+			[2, 1, 1],
+			[1, 1, 3],
+			[3, 1, 3],
+			[2, 3, 2],
+			[1, 2, 3],
+			[3, 2, 3],
+		],
+	},
+	{
+		name: "요새함",
+		parts: [
+			[2, 1, 1],
+			[1, 1, 3],
+			[3, 1, 3],
+			[1, 2, 3],
+			[3, 2, 3],
+			[2, 3, 2],
+			[2, 4, 2],
+		],
+	},
+];
+
+
+//==============================================================================
+// 템플릿으로부터 적 우주선 그리드 생성.
 //==============================================================================
 /**
+ * @param { object } template
  * @returns { Array<Array<number>> }
  */
-function createRandomEnemyGrid() {
+function createEnemyFromTemplate(template) {
 	const grid = createGridWithCore();
-	const attachmentRange = ENEMY_MAX_ATTACHMENTS - ENEMY_MIN_ATTACHMENTS + 1;
-	const attachmentTarget = ENEMY_MIN_ATTACHMENTS + System.Math.floor(System.Math.random() * attachmentRange);
-
-	for (let placed = 0; placed < attachmentTarget; ++placed) {
-		const candidates = [];
-		for (let column = 0; column < GRID_COLUMNS; ++column) {
-			for (let row = 0; row < GRID_ROWS; ++row) {
-				if (grid[column][row] === EMPTY_CELL && isAdjacentInGrid(grid, column, row)) {
-					candidates.push([column, row]);
-				}
-			}
-		}
-		if (candidates.length === 0) {
-			break;
-		}
-
-		const pickedCandidate = candidates[System.Math.floor(System.Math.random() * candidates.length)];
-		const partIndex = ATTACHMENT_PART_INDICES[System.Math.floor(System.Math.random() * ATTACHMENT_PART_INDICES.length)];
-		grid[pickedCandidate[0]][pickedCandidate[1]] = partIndex;
+	const parts = template.parts;
+	for (const part of parts) {
+		const column = part[0];
+		const row = part[1];
+		const partIndex = part[2];
+		grid[column][row] = partIndex;
 	}
 	return grid;
 }
@@ -244,9 +326,20 @@ class AppScene extends Scene {
 	/** @type { number } */ #playerGold;
 	/** @type { object } */ #inventory;
 	/** @type { Array<Array<number>> } */ #grid;
-	/** @type { number } */ #selectedPartIndex;
+	/** @type { number } */ #draggingPartIndex;
+	/** @type { Vector2 } */ #dragPosition;
+	/** @type { number } */ #dragCandidatePartIndex;
+	/** @type { string } */ #inventoryDragMode;
+	/** @type { number } */ #inventoryScrollOffset;
+	/** @type { number } */ #inventoryScrollStartY;
+	/** @type { number } */ #inventoryScrollStartOffset;
 	/** @type { Array<object> } */ #enemyList;
 	/** @type { number } */ #selectedEnemyIndex;
+	/** @type { number } */ #battleScrollOffset;
+	/** @type { number } */ #battleScrollStartOffset;
+	/** @type { number } */ #battleScrollDragStartY;
+	/** @type { boolean } */ #battleIsScrolling;
+	/** @type { object } */ #battleState;
 
 	//==============================================================================
 	// 불러오기.
@@ -277,9 +370,30 @@ class AppScene extends Scene {
 			3: 2,
 		};
 		this.#grid = createGridWithCore();
-		this.#selectedPartIndex = 1;
-		this.#enemyList = this.generateRandomEnemies(ENEMY_COUNT);
+		this.#draggingPartIndex = NO_SELECTION;
+		this.#dragPosition = Vector2.zero();
+		this.#dragCandidatePartIndex = NO_SELECTION;
+		this.#inventoryDragMode = DRAG_MODE_NONE;
+		this.#inventoryScrollOffset = 0;
+		this.#inventoryScrollStartY = 0;
+		this.#inventoryScrollStartOffset = 0;
+		this.#enemyList = this.generateEnemies();
 		this.#selectedEnemyIndex = NO_SELECTION;
+		this.#battleScrollOffset = 0;
+		this.#battleScrollStartOffset = 0;
+		this.#battleScrollDragStartY = 0;
+		this.#battleIsScrolling = false;
+		this.#battleState = null;
+	}
+
+	//==============================================================================
+	// 전투 상태 반환.
+	//==============================================================================
+	/**
+	 * @returns { object }
+	 */
+	getBattleState() {
+		return this.#battleState;
 	}
 
 	//==============================================================================
@@ -345,13 +459,23 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
-	// 선택된 부품 인덱스 반환.
+	// 드래그 중인 부품 인덱스 반환.
 	//==============================================================================
 	/**
 	 * @returns { number }
 	 */
-	getSelectedPartIndex() {
-		return this.#selectedPartIndex;
+	getDraggingPartIndex() {
+		return this.#draggingPartIndex;
+	}
+
+	//==============================================================================
+	// 드래그 위치 반환.
+	//==============================================================================
+	/**
+	 * @returns { Vector2 }
+	 */
+	getDragPosition() {
+		return this.#dragPosition;
 	}
 
 	//==============================================================================
@@ -375,19 +499,18 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
-	// 무작위 적 우주선 목록 생성.
+	// 적 우주선 목록 생성. (템플릿 기반)
 	//==============================================================================
 	/**
-	 * @param { number } count
 	 * @returns { Array<object> }
 	 */
-	generateRandomEnemies(count) {
+	generateEnemies() {
 		const enemies = [];
-		for (let index = 0; index < count; ++index) {
-			const enemyGrid = createRandomEnemyGrid();
+		for (const template of EnemyTemplates) {
+			const enemyGrid = createEnemyFromTemplate(template);
 			const enemyStats = calculateStatsForGrid(enemyGrid);
 			enemies.push({
-				name: `적 우주선 ${index + 1}`,
+				name: template.name,
 				grid: enemyGrid,
 				stats: enemyStats,
 			});
@@ -454,6 +577,30 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
+	// 대상 칸이 다른 부품과 인접하는지 여부 반환.
+	//==============================================================================
+	/**
+	 * @param { number } column
+	 * @param { number } row
+	 * @returns { boolean }
+	 */
+	isAdjacentToPart(column, row) {
+		const grid = this.getGrid();
+		return isAdjacentInGrid(grid, column, row);
+	}
+
+	//==============================================================================
+	// 모든 부품이 코어와 연결되어 있는지 여부 반환.
+	//==============================================================================
+	/**
+	 * @returns { boolean }
+	 */
+	isAllConnected() {
+		const grid = this.getGrid();
+		return isAllConnectedInGrid(grid);
+	}
+
+	//==============================================================================
 	// 빌드 화면 레이아웃 계산.
 	// 외부 하드코딩 위치 대신 현재 뷰 크기를 읽어 런타임에 배치를 계산한다.
 	//==============================================================================
@@ -462,38 +609,56 @@ class AppScene extends Scene {
 	 * @returns { object }
 	 */
 	getBuildLayout(viewSize) {
-		const gridAreaWidth = viewSize.x * 0.86;
+		// 그리드는 인벤토리 공간 확보를 위해 폭을 줄여 상단에 배치.
+		const gridAreaWidth = viewSize.x * 0.72;
 		const cellSize = System.Math.floor(gridAreaWidth / GRID_COLUMNS);
 		const gridWidth = cellSize * GRID_COLUMNS;
 		const gridOriginX = System.Math.floor((viewSize.x - gridWidth) * 0.5);
-		const gridOriginY = System.Math.floor(viewSize.y * 0.22);
+		const gridOriginY = System.Math.floor(viewSize.y * 0.165);
 
-		const paletteCount = ATTACHMENT_PART_INDICES.length;
-		const paletteAreaWidth = viewSize.x * 0.92;
-		const paletteGap = 12;
-		const paletteOriginX = System.Math.floor((viewSize.x - paletteAreaWidth) * 0.5);
-		const paletteOriginY = System.Math.floor(viewSize.y * 0.78);
-		const paletteButtonWidth = System.Math.floor((paletteAreaWidth - paletteGap * (paletteCount - 1)) / paletteCount);
-		const paletteButtonHeight = System.Math.floor(viewSize.y * 0.09);
+		// 하단 세로 스크롤 인벤토리 영역.
+		const inventoryAreaTop = System.Math.floor(viewSize.y * 0.585);
+		const navBarHeight = System.Math.floor(viewSize.y * 0.09);
+		const inventoryAreaBottom = viewSize.y - navBarHeight;
+		const slotMarginX = System.Math.floor(viewSize.x * 0.06);
+		const slotAreaWidth = viewSize.x - slotMarginX * 2;
+		const slotGapX = System.Math.floor(viewSize.x * 0.02);
+		const slotWidth = System.Math.floor((slotAreaWidth - slotGapX * (INVENTORY_COLUMNS - 1)) / INVENTORY_COLUMNS);
+		const slotHeight = System.Math.floor(viewSize.y * 0.075);
+		const slotGap = System.Math.floor(viewSize.y * 0.012);
 
-		const paletteButtons = [];
-		for (let index = 0; index < paletteCount; ++index) {
-			const partIndex = ATTACHMENT_PART_INDICES[index];
-			const buttonX = paletteOriginX + index * (paletteButtonWidth + paletteGap);
-			paletteButtons.push({
-				partIndex: partIndex,
-				x: buttonX,
-				y: paletteOriginY,
-				width: paletteButtonWidth,
-				height: paletteButtonHeight,
-			});
+		// 보유 수량만큼 모듈을 개별 슬롯으로 펼친다. (스택 없음, 2열, 스크롤 오프셋 반영)
+		const scrollOffset = this.#inventoryScrollOffset;
+		const inventorySlots = [];
+		let slotIndex = 0;
+		for (const partIndex of ATTACHMENT_PART_INDICES) {
+			const inventoryCount = this.getInventoryCount(partIndex);
+			for (let copy = 0; copy < inventoryCount; ++copy) {
+				const columnIndex = slotIndex % INVENTORY_COLUMNS;
+				const rowIndex = System.Math.floor(slotIndex / INVENTORY_COLUMNS);
+				const slotX = slotMarginX + columnIndex * (slotWidth + slotGapX);
+				const slotY = inventoryAreaTop + scrollOffset + rowIndex * (slotHeight + slotGap);
+				inventorySlots.push({
+					partIndex: partIndex,
+					x: slotX,
+					y: slotY,
+					width: slotWidth,
+					height: slotHeight,
+				});
+				++slotIndex;
+			}
 		}
 
 		return {
 			cellSize: cellSize,
 			gridOriginX: gridOriginX,
 			gridOriginY: gridOriginY,
-			paletteButtons: paletteButtons,
+			inventoryAreaTop: inventoryAreaTop,
+			inventoryAreaBottom: inventoryAreaBottom,
+			slotMarginX: slotMarginX,
+			slotHeight: slotHeight,
+			slotGap: slotGap,
+			inventorySlots: inventorySlots,
 		};
 	}
 
@@ -522,22 +687,22 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
-	// 뷰 위치에 해당하는 팔레트 부품 인덱스 반환.
+	// 뷰 위치에 해당하는 인벤토리 슬롯 부품 인덱스 반환.
 	//==============================================================================
 	/**
 	 * @param { Vector2 } viewPosition
 	 * @param { object } layout
 	 * @returns { number }
 	 */
-	getPalettePartIndexAt(viewPosition, layout) {
-		const paletteButtons = layout.paletteButtons;
-		for (const paletteButton of paletteButtons) {
-			const isInside = viewPosition.x >= paletteButton.x &&
-				viewPosition.x <= paletteButton.x + paletteButton.width &&
-				viewPosition.y >= paletteButton.y &&
-				viewPosition.y <= paletteButton.y + paletteButton.height;
+	getInventorySlotAt(viewPosition, layout) {
+		const inventorySlots = layout.inventorySlots;
+		for (const inventorySlot of inventorySlots) {
+			const isInside = viewPosition.x >= inventorySlot.x &&
+				viewPosition.x <= inventorySlot.x + inventorySlot.width &&
+				viewPosition.y >= inventorySlot.y &&
+				viewPosition.y <= inventorySlot.y + inventorySlot.height;
 			if (isInside) {
-				return paletteButton.partIndex;
+				return inventorySlot.partIndex;
 			}
 		}
 		return NO_SELECTION;
@@ -618,7 +783,7 @@ class AppScene extends Scene {
 			},
 			{
 				tab: AppTab.battle,
-				label: "전투",
+				label: "싸우기",
 			},
 			{
 				tab: AppTab.settings,
@@ -683,15 +848,27 @@ class AppScene extends Scene {
 		const itemHeight = System.Math.floor(viewSize.y * 0.13);
 		const itemGap = System.Math.floor(viewSize.y * 0.013);
 
+		const buttonWidth = System.Math.floor(listWidth * 0.22);
+		const buttonHeight = System.Math.floor(itemHeight * 0.5);
+		const buttonPadding = System.Math.floor(listWidth * 0.02);
+
+		const scrollOffset = this.#battleScrollOffset;
 		const enemyList = this.getEnemyList();
 		const items = [];
 		for (let index = 0; index < enemyList.length; ++index) {
+			const itemY = listOriginY + scrollOffset + index * (itemHeight + itemGap);
 			items.push({
 				index: index,
 				x: listOriginX,
-				y: listOriginY + index * (itemHeight + itemGap),
+				y: itemY,
 				width: listWidth,
 				height: itemHeight,
+				button: {
+					x: listOriginX + listWidth - buttonWidth - buttonPadding,
+					y: itemY + System.Math.floor((itemHeight - buttonHeight) * 0.5),
+					width: buttonWidth,
+					height: buttonHeight,
+				},
 			});
 		}
 
@@ -735,37 +912,50 @@ class AppScene extends Scene {
 
 		const engine = this.getEngine();
 		const inputManager = engine.getInputManager();
-		if (!inputManager.isTouchPressed()) {
+		const viewManager = engine.getViewManager();
+		const viewSize = viewManager.getViewSize();
+
+		// 전투 진행 중에는 전투만 갱신한다. (탭/네비 입력 차단)
+		if (this.#battleState) {
+			this.updateBattle(timeDelta, viewSize);
+			if (inputManager.isTouchPressed()) {
+				const battleInputPosition = inputManager.getViewInputPosition();
+				this.handleBattleInput(battleInputPosition, viewSize);
+			}
 			return;
 		}
 
-		const viewManager = engine.getViewManager();
-		const viewSize = viewManager.getViewSize();
+		const isPressed = inputManager.isTouchPressed();
 		const viewInputPosition = inputManager.getViewInputPosition();
+		const currentTab = this.getCurrentTab();
 
-		// 네비게이션 탭 전환 우선 처리.
-		const navigationLayout = this.getNavigationLayout(viewSize);
-		const navigationTab = this.getNavigationTabAt(viewInputPosition, navigationLayout);
-		if (navigationTab !== NO_SELECTION) {
-			this.#currentTab = navigationTab;
-			return;
+		// 네비게이션 탭 전환은 누른 순간 최우선 처리.
+		if (isPressed) {
+			const navigationLayout = this.getNavigationLayout(viewSize);
+			const navigationTab = this.getNavigationTabAt(viewInputPosition, navigationLayout);
+			if (navigationTab !== NO_SELECTION) {
+				this.#draggingPartIndex = NO_SELECTION;
+				this.#currentTab = navigationTab;
+				return;
+			}
 		}
 
 		// 현재 탭 콘텐츠 입력 처리.
-		const currentTab = this.getCurrentTab();
 		switch (currentTab) {
 			case AppTab.build: {
-					this.tickBuildTab(viewSize, viewInputPosition);
+					this.tickBuildTab(viewSize, inputManager);
 					break;
 				}
 
 			case AppTab.shop: {
-					this.tickShopTab(viewSize, viewInputPosition);
+					if (isPressed) {
+						this.tickShopTab(viewSize, viewInputPosition);
+					}
 					break;
 				}
 
 			case AppTab.battle: {
-					this.tickBattleTab(viewSize, viewInputPosition);
+					this.tickBattleTab(viewSize, inputManager);
 					break;
 				}
 
@@ -776,27 +966,109 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
-	// 빌드 탭 입력 처리.
+	// 조립 탭 입력 처리.
+	// 인벤토리 슬롯을 드래그해 그리드 빈 칸에 드롭하면 배치, 그리드 부품을 누르면 제거.
 	//==============================================================================
 	/**
 	 * @param { Vector2 } viewSize
-	 * @param { Vector2 } viewInputPosition
+	 * @param { object } inputManager
 	 */
-	tickBuildTab(viewSize, viewInputPosition) {
+	tickBuildTab(viewSize, inputManager) {
 		const layout = this.getBuildLayout(viewSize);
+		const viewInputPosition = inputManager.getViewInputPosition();
 
-		// 팔레트 선택 우선 처리.
-		const palettePartIndex = this.getPalettePartIndexAt(viewInputPosition, layout);
-		if (palettePartIndex !== NO_SELECTION) {
-			this.#selectedPartIndex = palettePartIndex;
+		// 누름.
+		if (inputManager.isTouchPressed()) {
+			const isInsideInventory = viewInputPosition.y >= layout.inventoryAreaTop &&
+				viewInputPosition.y <= layout.inventoryAreaBottom;
+			if (isInsideInventory) {
+				// 인벤토리 영역: 슬롯이면 드래그 후보, 빈 곳이면 스크롤 대기.
+				const slotPartIndex = this.getInventorySlotAt(viewInputPosition, layout);
+				this.#dragCandidatePartIndex = slotPartIndex;
+				this.#inventoryScrollStartY = viewInputPosition.y;
+				this.#inventoryScrollStartOffset = this.#inventoryScrollOffset;
+				this.#inventoryDragMode = DRAG_MODE_PENDING;
+				return;
+			}
+
+			// 그리드 영역: 부품 제거.
+			const gridCell = this.getGridCellAt(viewInputPosition, layout);
+			if (gridCell) {
+				this.removePartFromCell(gridCell.column, gridCell.row);
+			}
 			return;
 		}
 
-		// 그리드 칸 배치/제거 처리.
-		const gridCell = this.getGridCellAt(viewInputPosition, layout);
-		if (gridCell) {
-			this.applyPartToCell(gridCell.column, gridCell.row);
+		// 이동: 부착(그리드 영역으로 끌어올림) 또는 스크롤(영역 내 위아래) 결정 및 처리.
+		if (inputManager.isTouchMoved()) {
+			const isAboveInventory = viewInputPosition.y < layout.inventoryAreaTop;
+			const hasCandidate = this.#dragCandidatePartIndex !== NO_SELECTION;
+
+			// 그리드 영역으로 끌어올리면(후보가 있으면) 스크롤 중이라도 부착으로 전환한다.
+			if (hasCandidate && isAboveInventory && this.#inventoryDragMode !== DRAG_MODE_ATTACH) {
+				this.#inventoryDragMode = DRAG_MODE_ATTACH;
+				this.#draggingPartIndex = this.#dragCandidatePartIndex;
+			}
+			// 영역 안에서 충분히 움직이면 스크롤로 확정한다.
+			else if (this.#inventoryDragMode === DRAG_MODE_PENDING) {
+				const dragDelta = viewInputPosition.y - this.#inventoryScrollStartY;
+				if (System.Math.abs(dragDelta) > SCROLL_DRAG_THRESHOLD) {
+					this.#inventoryDragMode = DRAG_MODE_SCROLL;
+				}
+			}
+
+			if (this.#inventoryDragMode === DRAG_MODE_ATTACH) {
+				this.#dragPosition = viewInputPosition.clone();
+			}
+			else if (this.#inventoryDragMode === DRAG_MODE_SCROLL) {
+				const dragDelta = viewInputPosition.y - this.#inventoryScrollStartY;
+				const nextOffset = this.#inventoryScrollStartOffset + dragDelta;
+				this.#inventoryScrollOffset = this.clampInventoryScroll(nextOffset, viewSize);
+			}
+			return;
 		}
+
+		// 뗌: 부착 모드면 그리드에 드롭.
+		if (inputManager.isTouchReleased()) {
+			if (this.#inventoryDragMode === DRAG_MODE_ATTACH && this.#draggingPartIndex !== NO_SELECTION) {
+				const gridCell = this.getGridCellAt(viewInputPosition, layout);
+				if (gridCell) {
+					this.placePartAtCell(gridCell.column, gridCell.row, this.#draggingPartIndex);
+				}
+			}
+			this.#inventoryDragMode = DRAG_MODE_NONE;
+			this.#draggingPartIndex = NO_SELECTION;
+			this.#dragCandidatePartIndex = NO_SELECTION;
+		}
+	}
+
+	//==============================================================================
+	// 인벤토리 스크롤 오프셋 제한.
+	//==============================================================================
+	/**
+	 * @param { number } offset
+	 * @param { Vector2 } viewSize
+	 * @returns { number }
+	 */
+	clampInventoryScroll(offset, viewSize) {
+		const layout = this.getBuildLayout(viewSize);
+		const slotCount = layout.inventorySlots.length;
+		const rowCount = System.Math.ceil(slotCount / INVENTORY_COLUMNS);
+		const contentHeight = rowCount * (layout.slotHeight + layout.slotGap);
+		const viewAreaHeight = layout.inventoryAreaBottom - layout.inventoryAreaTop;
+
+		let minOffset = viewAreaHeight - contentHeight;
+		if (minOffset > 0) {
+			minOffset = 0;
+		}
+		let clampedOffset = offset;
+		if (clampedOffset > 0) {
+			clampedOffset = 0;
+		}
+		if (clampedOffset < minOffset) {
+			clampedOffset = minOffset;
+		}
+		return clampedOffset;
 	}
 
 	//==============================================================================
@@ -815,14 +1087,67 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
-	// 전투 탭 입력 처리.
+	// 전투 탭 입력 처리. (드래그는 스크롤, 짧은 탭은 선택/전투)
+	//==============================================================================
+	/**
+	 * @param { Vector2 } viewSize
+	 * @param { object } inputManager
+	 */
+	tickBattleTab(viewSize, inputManager) {
+		const viewInputPosition = inputManager.getViewInputPosition();
+
+		if (inputManager.isTouchPressed()) {
+			this.#battleScrollDragStartY = viewInputPosition.y;
+			this.#battleScrollStartOffset = this.#battleScrollOffset;
+			this.#battleIsScrolling = false;
+			return;
+		}
+
+		if (inputManager.isTouchMoved()) {
+			const dragDelta = viewInputPosition.y - this.#battleScrollDragStartY;
+			if (System.Math.abs(dragDelta) > SCROLL_DRAG_THRESHOLD) {
+				this.#battleIsScrolling = true;
+			}
+			if (this.#battleIsScrolling) {
+				const nextOffset = this.#battleScrollStartOffset + dragDelta;
+				this.#battleScrollOffset = this.clampBattleScroll(nextOffset, viewSize);
+			}
+			return;
+		}
+
+		if (inputManager.isTouchReleased()) {
+			if (!this.#battleIsScrolling) {
+				this.handleBattleTap(viewSize, viewInputPosition);
+			}
+			this.#battleIsScrolling = false;
+		}
+	}
+
+	//==============================================================================
+	// 전투 탭 탭(선택/전투 버튼) 처리.
 	//==============================================================================
 	/**
 	 * @param { Vector2 } viewSize
 	 * @param { Vector2 } viewInputPosition
 	 */
-	tickBattleTab(viewSize, viewInputPosition) {
+	handleBattleTap(viewSize, viewInputPosition) {
 		const battleLayout = this.getBattleLayout(viewSize);
+		const items = battleLayout.items;
+
+		// "전투" 버튼 우선 처리.
+		for (const item of items) {
+			const button = item.button;
+			const isInsideButton = viewInputPosition.x >= button.x &&
+				viewInputPosition.x <= button.x + button.width &&
+				viewInputPosition.y >= button.y &&
+				viewInputPosition.y <= button.y + button.height;
+			if (isInsideButton) {
+				this.startBattle(item.index, viewSize);
+				return;
+			}
+		}
+
+		// 항목 선택.
 		const itemIndex = this.getBattleItemAt(viewInputPosition, battleLayout);
 		if (itemIndex !== NO_SELECTION) {
 			this.#selectedEnemyIndex = itemIndex;
@@ -830,16 +1155,82 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
-	// 그리드 칸에 선택 부품 배치 또는 제거.
-	// 배치: 보유 수량 > 0 + 최대 부착물 수 이하 + 기존 부품과 인접해야 한다.
-	// 제거: 제거 후에도 모든 부품이 코어와 연결되어야 하며, 보유 수량으로 반환된다.
+	// 전투 목록 스크롤 오프셋 제한.
+	//==============================================================================
+	/**
+	 * @param { number } offset
+	 * @param { Vector2 } viewSize
+	 * @returns { number }
+	 */
+	clampBattleScroll(offset, viewSize) {
+		const enemyList = this.getEnemyList();
+		const itemHeight = System.Math.floor(viewSize.y * 0.13);
+		const itemGap = System.Math.floor(viewSize.y * 0.013);
+		const listOriginY = System.Math.floor(viewSize.y * 0.15);
+		const navBarHeight = System.Math.floor(viewSize.y * 0.09);
+		const navBarY = viewSize.y - navBarHeight;
+		const contentHeight = enemyList.length * (itemHeight + itemGap);
+		const viewAreaHeight = navBarY - listOriginY;
+
+		let minOffset = viewAreaHeight - contentHeight;
+		if (minOffset > 0) {
+			minOffset = 0;
+		}
+		let clampedOffset = offset;
+		if (clampedOffset > 0) {
+			clampedOffset = 0;
+		}
+		if (clampedOffset < minOffset) {
+			clampedOffset = minOffset;
+		}
+		return clampedOffset;
+	}
+
+	//==============================================================================
+	// 그리드 칸에 부품 배치.
+	// 빈 칸 + 보유 수량 > 0 + 최대 부착물 수 이하 + 기존 부품과 인접해야 한다.
+	//==============================================================================
+	/**
+	 * @param { number } column
+	 * @param { number } row
+	 * @param { number } partIndex
+	 */
+	placePartAtCell(column, row, partIndex) {
+		if (column === CORE_COLUMN && row === CORE_ROW) {
+			return;
+		}
+
+		const grid = this.getGrid();
+		if (grid[column][row] !== EMPTY_CELL) {
+			return;
+		}
+		const inventoryCount = this.getInventoryCount(partIndex);
+		if (inventoryCount <= 0) {
+			return;
+		}
+		const attachmentCount = this.countAttachments();
+		const maxAttachments = this.getMaxAttachments();
+		if (attachmentCount >= maxAttachments) {
+			return;
+		}
+		const isAdjacent = this.isAdjacentToPart(column, row);
+		if (!isAdjacent) {
+			return;
+		}
+
+		grid[column][row] = partIndex;
+		this.#inventory[partIndex] -= 1;
+	}
+
+	//==============================================================================
+	// 그리드 칸의 부품 제거.
+	// 제거 후에도 모든 부품이 코어와 연결되어야 하며, 보유 수량으로 반환된다.
 	//==============================================================================
 	/**
 	 * @param { number } column
 	 * @param { number } row
 	 */
-	applyPartToCell(column, row) {
-		// 코어 칸은 고정.
+	removePartFromCell(column, row) {
 		if (column === CORE_COLUMN && row === CORE_ROW) {
 			return;
 		}
@@ -847,58 +1238,16 @@ class AppScene extends Scene {
 		const grid = this.getGrid();
 		const currentPartIndex = grid[column][row];
 		if (currentPartIndex === EMPTY_CELL) {
-			// 배치.
-			const selectedPartIndex = this.getSelectedPartIndex();
-			const inventoryCount = this.getInventoryCount(selectedPartIndex);
-			if (inventoryCount <= 0) {
-				return;
-			}
-			const attachmentCount = this.countAttachments();
-			const maxAttachments = this.getMaxAttachments();
-			if (attachmentCount >= maxAttachments) {
-				return;
-			}
-			const isAdjacent = this.isAdjacentToPart(column, row);
-			if (!isAdjacent) {
-				return;
-			}
-			grid[column][row] = selectedPartIndex;
-			this.#inventory[selectedPartIndex] -= 1;
+			return;
 		}
-		else {
-			// 제거. (연결이 끊기면 되돌린다.)
-			grid[column][row] = EMPTY_CELL;
-			const isConnected = this.isAllConnected();
-			if (!isConnected) {
-				grid[column][row] = currentPartIndex;
-				return;
-			}
-			this.#inventory[currentPartIndex] += 1;
+
+		grid[column][row] = EMPTY_CELL;
+		const isConnected = this.isAllConnected();
+		if (!isConnected) {
+			grid[column][row] = currentPartIndex;
+			return;
 		}
-	}
-
-	//==============================================================================
-	// 대상 칸이 다른 부품과 인접하는지 여부 반환.
-	//==============================================================================
-	/**
-	 * @param { number } column
-	 * @param { number } row
-	 * @returns { boolean }
-	 */
-	isAdjacentToPart(column, row) {
-		const grid = this.getGrid();
-		return isAdjacentInGrid(grid, column, row);
-	}
-
-	//==============================================================================
-	// 모든 부품이 코어와 연결되어 있는지 여부 반환.
-	//==============================================================================
-	/**
-	 * @returns { boolean }
-	 */
-	isAllConnected() {
-		const grid = this.getGrid();
-		return isAllConnectedInGrid(grid);
+		this.#inventory[currentPartIndex] += 1;
 	}
 
 	//==============================================================================
@@ -926,6 +1275,12 @@ class AppScene extends Scene {
 		viewManager.applyViewRect(canvasRenderingContext);
 		canvasRenderingContext.fillStyle = "#11162a";
 		canvasRenderingContext.fillRect(0, 0, viewSize.x, viewSize.y);
+
+		// 전투 진행 중에는 전투 화면만 출력한다. (상단 바/네비 숨김)
+		if (this.#battleState) {
+			this.drawBattle(canvasRenderingContext, viewSize);
+			return;
+		}
 
 		// 현재 탭 콘텐츠 출력.
 		const currentTab = this.getCurrentTab();
@@ -1008,7 +1363,17 @@ class AppScene extends Scene {
 		const layout = this.getBuildLayout(viewSize);
 		this.drawBuildHeader(canvasRenderingContext, viewSize);
 		this.drawGrid(canvasRenderingContext, layout);
-		this.drawPalette(canvasRenderingContext, layout);
+		this.drawInventory(canvasRenderingContext, layout, viewSize);
+
+		// 드래그 중인 부품 미리보기.
+		const draggingPartIndex = this.getDraggingPartIndex();
+		if (draggingPartIndex !== NO_SELECTION) {
+			const dragPosition = this.getDragPosition();
+			const cellSize = layout.cellSize;
+			canvasRenderingContext.globalAlpha = 0.7;
+			this.drawPart(canvasRenderingContext, draggingPartIndex, dragPosition.x - cellSize * 0.5, dragPosition.y - cellSize * 0.5, cellSize);
+			canvasRenderingContext.globalAlpha = 1.0;
+		}
 	}
 
 	//==============================================================================
@@ -1023,13 +1388,13 @@ class AppScene extends Scene {
 		canvasRenderingContext.font = "bold 44px sans-serif";
 		canvasRenderingContext.textAlign = "center";
 		canvasRenderingContext.textBaseline = "top";
-		canvasRenderingContext.fillText("우주선 조립", viewSize.x * 0.5, viewSize.y * 0.08);
+		canvasRenderingContext.fillText("우주선 조립", viewSize.x * 0.5, viewSize.y * 0.065);
 
 		const shipStats = this.calculateShipStats();
 		const statsText = `체력 ${shipStats.health}   공격력 ${shipStats.attack}   속도 ${shipStats.speed}`;
 		canvasRenderingContext.fillStyle = "#aab4d4";
 		canvasRenderingContext.font = "26px sans-serif";
-		canvasRenderingContext.fillText(statsText, viewSize.x * 0.5, viewSize.y * 0.135);
+		canvasRenderingContext.fillText(statsText, viewSize.x * 0.5, viewSize.y * 0.105);
 
 		const attachmentCount = this.countAttachments();
 		const maxAttachments = this.getMaxAttachments();
@@ -1040,7 +1405,7 @@ class AppScene extends Scene {
 		}
 		canvasRenderingContext.fillStyle = attachmentColor;
 		canvasRenderingContext.font = "bold 26px sans-serif";
-		canvasRenderingContext.fillText(attachmentText, viewSize.x * 0.5, viewSize.y * 0.17);
+		canvasRenderingContext.fillText(attachmentText, viewSize.x * 0.5, viewSize.y * 0.135);
 	}
 
 	//==============================================================================
@@ -1151,41 +1516,63 @@ class AppScene extends Scene {
 	}
 
 	//==============================================================================
-	// 하단 부품 팔레트 출력. (보유 수량 표시)
+	// 하단 세로 스크롤 인벤토리 출력. (모듈을 개별 슬롯으로 나열, 드래그 소스)
 	//==============================================================================
 	/**
 	 * @param { CanvasRenderingContext2D } canvasRenderingContext
 	 * @param { object } layout
+	 * @param { Vector2 } viewSize
 	 */
-	drawPalette(canvasRenderingContext, layout) {
-		const paletteButtons = layout.paletteButtons;
-		const selectedPartIndex = this.getSelectedPartIndex();
+	drawInventory(canvasRenderingContext, layout, viewSize) {
+		// 영역 라벨. (클리핑 밖, 영역 위)
+		const labelOffsetY = System.Math.floor(viewSize.y * 0.008);
+		canvasRenderingContext.fillStyle = "#cfd6ea";
+		canvasRenderingContext.font = "bold 24px sans-serif";
+		canvasRenderingContext.textAlign = "left";
+		canvasRenderingContext.textBaseline = "bottom";
+		canvasRenderingContext.fillText("인벤토리 (위로 끌어 부착)", layout.slotMarginX, layout.inventoryAreaTop - labelOffsetY);
 
-		for (const paletteButton of paletteButtons) {
-			const partIndex = paletteButton.partIndex;
+		// 스크롤 영역 클리핑.
+		canvasRenderingContext.save();
+		canvasRenderingContext.beginPath();
+		canvasRenderingContext.rect(0, layout.inventoryAreaTop, viewSize.x, layout.inventoryAreaBottom - layout.inventoryAreaTop);
+		canvasRenderingContext.clip();
+
+		const inventorySlots = layout.inventorySlots;
+		for (const inventorySlot of inventorySlots) {
+			const partIndex = inventorySlot.partIndex;
 			const partDefinition = PartDefinitions[partIndex];
-			const inventoryCount = this.getInventoryCount(partIndex);
 
-			// 버튼 배경.
+			// 슬롯 배경.
+			canvasRenderingContext.fillStyle = "#1b2238";
+			canvasRenderingContext.fillRect(inventorySlot.x, inventorySlot.y, inventorySlot.width, inventorySlot.height);
+
+			// 좌측 모듈 색 아이콘.
+			const iconSize = inventorySlot.height * 0.64;
+			const iconX = inventorySlot.x + inventorySlot.height * 0.18;
+			const iconY = inventorySlot.y + inventorySlot.height * 0.18;
 			canvasRenderingContext.fillStyle = partDefinition.color;
-			canvasRenderingContext.fillRect(paletteButton.x, paletteButton.y, paletteButton.width, paletteButton.height);
+			canvasRenderingContext.fillRect(iconX, iconY, iconSize, iconSize);
 
-			// 선택 표시 외곽선.
-			if (partIndex === selectedPartIndex) {
-				canvasRenderingContext.strokeStyle = "#ffffff";
-				canvasRenderingContext.lineWidth = 4;
-				canvasRenderingContext.strokeRect(paletteButton.x + 2, paletteButton.y + 2, paletteButton.width - 4, paletteButton.height - 4);
-			}
+			// 모듈 이름.
+			const textX = iconX + iconSize + inventorySlot.width * 0.03;
+			canvasRenderingContext.fillStyle = "#ffffff";
+			canvasRenderingContext.font = "bold 28px sans-serif";
+			canvasRenderingContext.textAlign = "left";
+			canvasRenderingContext.textBaseline = "middle";
+			canvasRenderingContext.fillText(partDefinition.name, textX, inventorySlot.y + inventorySlot.height * 0.5);
+		}
 
-			// 버튼 이름 + 보유 수량.
-			const buttonCenterX = paletteButton.x + paletteButton.width * 0.5;
-			const buttonCenterY = paletteButton.y + paletteButton.height * 0.5;
-			const paletteLabel = `${partDefinition.name} (${inventoryCount})`;
-			canvasRenderingContext.fillStyle = "#101010";
-			canvasRenderingContext.font = "bold 24px sans-serif";
+		canvasRenderingContext.restore();
+
+		// 빈 인벤토리 안내.
+		if (inventorySlots.length === 0) {
+			const centerY = (layout.inventoryAreaTop + layout.inventoryAreaBottom) * 0.5;
+			canvasRenderingContext.fillStyle = "#7a85a8";
+			canvasRenderingContext.font = "24px sans-serif";
 			canvasRenderingContext.textAlign = "center";
 			canvasRenderingContext.textBaseline = "middle";
-			canvasRenderingContext.fillText(paletteLabel, buttonCenterX, buttonCenterY);
+			canvasRenderingContext.fillText("보유한 모듈이 없습니다. 상점에서 구매하세요.", viewSize.x * 0.5, centerY);
 		}
 	}
 
@@ -1261,7 +1648,16 @@ class AppScene extends Scene {
 		canvasRenderingContext.font = "bold 44px sans-serif";
 		canvasRenderingContext.textAlign = "center";
 		canvasRenderingContext.textBaseline = "top";
-		canvasRenderingContext.fillText("전투 상대 선택", viewSize.x * 0.5, viewSize.y * 0.08);
+		canvasRenderingContext.fillText("싸울 상대 선택", viewSize.x * 0.5, viewSize.y * 0.08);
+
+		// 스크롤 영역 클리핑. (목록만 잘라 그린다, 제목/네비는 영향 없음)
+		const navBarHeight = System.Math.floor(viewSize.y * 0.09);
+		const clipTop = System.Math.floor(viewSize.y * 0.14);
+		const clipBottom = viewSize.y - navBarHeight;
+		canvasRenderingContext.save();
+		canvasRenderingContext.beginPath();
+		canvasRenderingContext.rect(0, clipTop, viewSize.x, clipBottom - clipTop);
+		canvasRenderingContext.clip();
 
 		const battleLayout = this.getBattleLayout(viewSize);
 		const enemyList = this.getEnemyList();
@@ -1306,7 +1702,19 @@ class AppScene extends Scene {
 			canvasRenderingContext.fillStyle = "#aab4d4";
 			canvasRenderingContext.font = "22px sans-serif";
 			canvasRenderingContext.fillText(enemyStatsText, textX, item.y + item.height * 0.68);
+
+			// "전투" 버튼.
+			const button = item.button;
+			canvasRenderingContext.fillStyle = "#d24a4a";
+			canvasRenderingContext.fillRect(button.x, button.y, button.width, button.height);
+			canvasRenderingContext.fillStyle = "#ffffff";
+			canvasRenderingContext.font = "bold 28px sans-serif";
+			canvasRenderingContext.textAlign = "center";
+			canvasRenderingContext.textBaseline = "middle";
+			canvasRenderingContext.fillText("싸우기", button.x + button.width * 0.5, button.y + button.height * 0.5);
 		}
+
+		canvasRenderingContext.restore();
 	}
 
 	//==============================================================================
@@ -1376,6 +1784,494 @@ class AppScene extends Scene {
 			canvasRenderingContext.fillText(button.label, buttonCenterX, buttonCenterY);
 		}
 	}
+
+	//==============================================================================
+	// 전투 화면 배치 계산.
+	//==============================================================================
+	/**
+	 * @param { Vector2 } viewSize
+	 * @returns { object }
+	 */
+	getBattleArena(viewSize) {
+		const cellSize = System.Math.floor(viewSize.x * 0.085);
+		const shipHalf = cellSize * 2.5;
+		const mapLeft = System.Math.floor(viewSize.x * 0.06);
+		const mapRight = viewSize.x - mapLeft;
+		const mapTop = System.Math.floor(viewSize.y * 0.105);
+		const mapBottom = System.Math.floor(viewSize.y * 0.82);
+		const centerX = viewSize.x * 0.5;
+		const startMargin = System.Math.floor(viewSize.y * 0.02);
+		const enemyStartY = mapTop + shipHalf + startMargin;
+		const playerStartY = mapBottom - shipHalf - startMargin;
+		const amplitude = (mapRight - mapLeft) * 0.28;
+		return {
+			cellSize: cellSize,
+			shipHalf: shipHalf,
+			mapLeft: mapLeft,
+			mapRight: mapRight,
+			mapTop: mapTop,
+			mapBottom: mapBottom,
+			centerX: centerX,
+			enemyStartY: enemyStartY,
+			playerStartY: playerStartY,
+			amplitude: amplitude,
+		};
+	}
+
+	//==============================================================================
+	// 전투 화면 조작 버튼 배치 계산.
+	//==============================================================================
+	/**
+	 * @param { Vector2 } viewSize
+	 * @returns { object }
+	 */
+	getBattleControlLayout(viewSize) {
+		const exitButton = {
+			x: System.Math.floor(viewSize.x * 0.72),
+			y: System.Math.floor(viewSize.y * 0.03),
+			width: System.Math.floor(viewSize.x * 0.24),
+			height: System.Math.floor(viewSize.y * 0.05),
+		};
+		const confirmButton = {
+			x: System.Math.floor(viewSize.x * 0.30),
+			y: System.Math.floor(viewSize.y * 0.56),
+			width: System.Math.floor(viewSize.x * 0.40),
+			height: System.Math.floor(viewSize.y * 0.07),
+		};
+		return {
+			exitButton: exitButton,
+			confirmButton: confirmButton,
+		};
+	}
+
+	//==============================================================================
+	// 전투 시작. (현재 조립한 우주선 vs 선택한 적)
+	//==============================================================================
+	/**
+	 * @param { number } enemyIndex
+	 * @param { Vector2 } viewSize
+	 */
+	startBattle(enemyIndex, viewSize) {
+		const arena = this.getBattleArena(viewSize);
+		const playerGrid = this.getGrid();
+		const playerStats = this.calculateShipStats();
+		const enemyList = this.getEnemyList();
+		const enemy = enemyList[enemyIndex];
+		const playerHealth = System.Math.max(1, playerStats.health);
+		const enemyHealth = System.Math.max(1, enemy.stats.health);
+
+		this.#selectedEnemyIndex = enemyIndex;
+		this.#battleState = {
+			phase: BATTLE_PHASE_FIGHTING,
+			elapsed: 0,
+			beams: [],
+			stars: this.createBattleStars(arena),
+			winnerIsPlayer: false,
+			player: {
+				name: "내 우주선",
+				grid: playerGrid,
+				stats: playerStats,
+				x: arena.centerX,
+				y: arena.playerStartY,
+				health: playerHealth,
+				maxHealth: playerHealth,
+				fireTimer: FIRE_PERIOD * 0.5,
+				phaseOffset: 0,
+				isPlayer: true,
+			},
+			enemy: {
+				name: enemy.name,
+				grid: enemy.grid,
+				stats: enemy.stats,
+				x: arena.centerX,
+				y: arena.enemyStartY,
+				health: enemyHealth,
+				maxHealth: enemyHealth,
+				fireTimer: FIRE_PERIOD,
+				phaseOffset: System.Math.PI,
+				isPlayer: false,
+			},
+		};
+	}
+
+	//==============================================================================
+	// 전투 맵 배경 별 생성. (맵 영역 내 고정 좌표)
+	//==============================================================================
+	/**
+	 * @param { object } arena
+	 * @returns { Array<object> }
+	 */
+	createBattleStars(arena) {
+		const stars = [];
+		const starCount = 40;
+		const mapWidth = arena.mapRight - arena.mapLeft;
+		const mapHeight = arena.mapBottom - arena.mapTop;
+		for (let index = 0; index < starCount; ++index) {
+			stars.push({
+				x: arena.mapLeft + System.Math.random() * mapWidth,
+				y: arena.mapTop + System.Math.random() * mapHeight,
+			});
+		}
+		return stars;
+	}
+
+	//==============================================================================
+	// 우주선 이동 속도 반환. (기본 + 추진체 속도 보너스)
+	//==============================================================================
+	/**
+	 * @param { object } ship
+	 * @param { Vector2 } viewSize
+	 * @returns { number }
+	 */
+	getShipMoveSpeed(ship, viewSize) {
+		const baseSpeed = viewSize.y * 0.10;
+		const speedBonus = ship.stats.speed * (viewSize.y * 0.004);
+		return baseSpeed + speedBonus;
+	}
+
+	//==============================================================================
+	// 우주선을 맵 경계 안으로 제한.
+	//==============================================================================
+	/**
+	 * @param { object } ship
+	 * @param { object } arena
+	 */
+	clampShipToMap(ship, arena) {
+		const shipHalf = arena.shipHalf;
+		const minX = arena.mapLeft + shipHalf;
+		const maxX = arena.mapRight - shipHalf;
+		const minY = arena.mapTop + shipHalf;
+		const maxY = arena.mapBottom - shipHalf;
+		if (ship.x < minX) {
+			ship.x = minX;
+		}
+		if (ship.x > maxX) {
+			ship.x = maxX;
+		}
+		if (ship.y < minY) {
+			ship.y = minY;
+		}
+		if (ship.y > maxY) {
+			ship.y = maxY;
+		}
+	}
+
+	//==============================================================================
+	// 전투 갱신.
+	//==============================================================================
+	/**
+	 * @param { number } timeDelta
+	 * @param { Vector2 } viewSize
+	 */
+	updateBattle(timeDelta, viewSize) {
+		const battleState = this.getBattleState();
+		if (battleState.phase !== BATTLE_PHASE_FIGHTING) {
+			return;
+		}
+
+		battleState.elapsed += timeDelta;
+		const arena = this.getBattleArena(viewSize);
+		const player = battleState.player;
+		const enemy = battleState.enemy;
+
+		// 접근/교전 페이즈 판정. (player 아래, enemy 위)
+		const engageGap = viewSize.y * 0.16;
+		const verticalGap = player.y - enemy.y;
+
+		if (verticalGap > engageGap) {
+			// 접근 페이즈: 서로 이동해 다가간다.
+			const playerMoveSpeed = this.getShipMoveSpeed(player, viewSize);
+			const enemyMoveSpeed = this.getShipMoveSpeed(enemy, viewSize);
+			player.x = arena.centerX;
+			enemy.x = arena.centerX;
+			player.y -= playerMoveSpeed * timeDelta;
+			enemy.y += enemyMoveSpeed * timeDelta;
+		}
+		else {
+			// 교전 페이즈: 좌우로 기동하며 무기를 발사한다.
+			player.x = arena.centerX + arena.amplitude * System.Math.sin((battleState.elapsed + player.phaseOffset) * SHIP_MOVE_FREQUENCY);
+			enemy.x = arena.centerX + arena.amplitude * System.Math.sin((battleState.elapsed + enemy.phaseOffset) * SHIP_MOVE_FREQUENCY);
+
+			const beamSpeed = viewSize.y * BEAM_SPEED_RATIO;
+			this.updateShipFire(player, timeDelta, beamSpeed);
+			this.updateShipFire(enemy, timeDelta, beamSpeed);
+		}
+
+		// 맵 경계 제한.
+		this.clampShipToMap(player, arena);
+		this.clampShipToMap(enemy, arena);
+
+		// 빔 이동 및 충돌.
+		const beams = battleState.beams;
+		const remainingBeams = [];
+		const shipHalf = arena.shipHalf;
+		for (const beam of beams) {
+			beam.y += beam.velocityY * timeDelta;
+			if (beam.y < arena.mapTop || beam.y > arena.mapBottom) {
+				continue;
+			}
+
+			let target = player;
+			if (beam.fromPlayer) {
+				target = enemy;
+			}
+			const isHit = beam.x >= target.x - shipHalf &&
+				beam.x <= target.x + shipHalf &&
+				beam.y >= target.y - shipHalf &&
+				beam.y <= target.y + shipHalf;
+			if (isHit) {
+				target.health -= beam.damage;
+				continue;
+			}
+			remainingBeams.push(beam);
+		}
+		battleState.beams = remainingBeams;
+
+		// 승패 판정.
+		if (player.health <= 0 || enemy.health <= 0) {
+			battleState.phase = BATTLE_PHASE_FINISHED;
+			let winnerIsPlayer = false;
+			if (enemy.health <= 0 && player.health > 0) {
+				winnerIsPlayer = true;
+			}
+			battleState.winnerIsPlayer = winnerIsPlayer;
+		}
+	}
+
+	//==============================================================================
+	// 우주선 무기 발사 갱신.
+	//==============================================================================
+	/**
+	 * @param { object } ship
+	 * @param { number } timeDelta
+	 * @param { number } beamSpeed
+	 */
+	updateShipFire(ship, timeDelta, beamSpeed) {
+		const attack = ship.stats.attack;
+		if (attack <= 0) {
+			return;
+		}
+
+		ship.fireTimer -= timeDelta;
+		if (ship.fireTimer > 0) {
+			return;
+		}
+		ship.fireTimer = FIRE_PERIOD;
+
+		let velocityY = beamSpeed;
+		if (ship.isPlayer) {
+			velocityY = -beamSpeed;
+		}
+
+		const battleState = this.getBattleState();
+		battleState.beams.push({
+			x: ship.x,
+			y: ship.y,
+			velocityY: velocityY,
+			damage: attack,
+			fromPlayer: ship.isPlayer,
+		});
+	}
+
+	//==============================================================================
+	// 전투 화면 입력 처리.
+	//==============================================================================
+	/**
+	 * @param { Vector2 } viewInputPosition
+	 * @param { Vector2 } viewSize
+	 */
+	handleBattleInput(viewInputPosition, viewSize) {
+		const battleState = this.getBattleState();
+		const controlLayout = this.getBattleControlLayout(viewSize);
+
+		if (battleState.phase === BATTLE_PHASE_FINISHED) {
+			const confirmButton = controlLayout.confirmButton;
+			const isInsideConfirm = viewInputPosition.x >= confirmButton.x &&
+				viewInputPosition.x <= confirmButton.x + confirmButton.width &&
+				viewInputPosition.y >= confirmButton.y &&
+				viewInputPosition.y <= confirmButton.y + confirmButton.height;
+			if (isInsideConfirm) {
+				this.#battleState = null;
+			}
+			return;
+		}
+
+		const exitButton = controlLayout.exitButton;
+		const isInsideExit = viewInputPosition.x >= exitButton.x &&
+			viewInputPosition.x <= exitButton.x + exitButton.width &&
+			viewInputPosition.y >= exitButton.y &&
+			viewInputPosition.y <= exitButton.y + exitButton.height;
+		if (isInsideExit) {
+			this.#battleState = null;
+		}
+	}
+
+	//==============================================================================
+	// 전투 화면 출력.
+	//==============================================================================
+	/**
+	 * @param { CanvasRenderingContext2D } canvasRenderingContext
+	 * @param { Vector2 } viewSize
+	 */
+	drawBattle(canvasRenderingContext, viewSize) {
+		const battleState = this.getBattleState();
+		const arena = this.getBattleArena(viewSize);
+
+		// 전체 배경.
+		canvasRenderingContext.fillStyle = "#05070f";
+		canvasRenderingContext.fillRect(0, 0, viewSize.x, viewSize.y);
+
+		// 맵 영역 배경.
+		const mapWidth = arena.mapRight - arena.mapLeft;
+		const mapHeight = arena.mapBottom - arena.mapTop;
+		canvasRenderingContext.fillStyle = "#070b1c";
+		canvasRenderingContext.fillRect(arena.mapLeft, arena.mapTop, mapWidth, mapHeight);
+
+		// 맵 내부 클리핑. (우주선/빔/별이 맵을 벗어나 그려지지 않게)
+		canvasRenderingContext.save();
+		canvasRenderingContext.beginPath();
+		canvasRenderingContext.rect(arena.mapLeft, arena.mapTop, mapWidth, mapHeight);
+		canvasRenderingContext.clip();
+
+		// 우주 배경 별.
+		canvasRenderingContext.fillStyle = "#33406a";
+		for (const star of battleState.stars) {
+			canvasRenderingContext.fillRect(star.x, star.y, 2, 2);
+		}
+
+		// 우주선 출력.
+		this.drawBattleShip(canvasRenderingContext, battleState.enemy, arena);
+		this.drawBattleShip(canvasRenderingContext, battleState.player, arena);
+
+		// 빔 출력.
+		const beams = battleState.beams;
+		for (const beam of beams) {
+			let beamColor = "#ff8a5a";
+			if (beam.fromPlayer) {
+				beamColor = "#9fe0ff";
+			}
+			canvasRenderingContext.fillStyle = beamColor;
+			canvasRenderingContext.fillRect(beam.x - BEAM_WIDTH * 0.5, beam.y - BEAM_HEIGHT * 0.5, BEAM_WIDTH, BEAM_HEIGHT);
+		}
+
+		canvasRenderingContext.restore();
+
+		// 맵 테두리.
+		canvasRenderingContext.strokeStyle = "#2a3a6a";
+		canvasRenderingContext.lineWidth = 3;
+		canvasRenderingContext.strokeRect(arena.mapLeft, arena.mapTop, mapWidth, mapHeight);
+
+		// 체력바 출력. (맵 밖)
+		this.drawHealthBar(canvasRenderingContext, battleState.enemy, viewSize, true);
+		this.drawHealthBar(canvasRenderingContext, battleState.player, viewSize, false);
+
+		// 조작/결과 출력.
+		const controlLayout = this.getBattleControlLayout(viewSize);
+		if (battleState.phase === BATTLE_PHASE_FINISHED) {
+			// 결과 오버레이.
+			canvasRenderingContext.fillStyle = "rgba(0, 0, 0, 0.6)";
+			canvasRenderingContext.fillRect(0, 0, viewSize.x, viewSize.y);
+
+			let resultText = "패배...";
+			if (battleState.winnerIsPlayer) {
+				resultText = "승리!";
+			}
+			canvasRenderingContext.fillStyle = "#ffffff";
+			canvasRenderingContext.font = "bold 72px sans-serif";
+			canvasRenderingContext.textAlign = "center";
+			canvasRenderingContext.textBaseline = "middle";
+			canvasRenderingContext.fillText(resultText, viewSize.x * 0.5, viewSize.y * 0.42);
+
+			const confirmButton = controlLayout.confirmButton;
+			canvasRenderingContext.fillStyle = "#3a6ea5";
+			canvasRenderingContext.fillRect(confirmButton.x, confirmButton.y, confirmButton.width, confirmButton.height);
+			canvasRenderingContext.fillStyle = "#ffffff";
+			canvasRenderingContext.font = "bold 32px sans-serif";
+			canvasRenderingContext.fillText("확인", confirmButton.x + confirmButton.width * 0.5, confirmButton.y + confirmButton.height * 0.5);
+		}
+		else {
+			const exitButton = controlLayout.exitButton;
+			canvasRenderingContext.fillStyle = "#2a3350";
+			canvasRenderingContext.fillRect(exitButton.x, exitButton.y, exitButton.width, exitButton.height);
+			canvasRenderingContext.fillStyle = "#ffffff";
+			canvasRenderingContext.font = "bold 26px sans-serif";
+			canvasRenderingContext.textAlign = "center";
+			canvasRenderingContext.textBaseline = "middle";
+			canvasRenderingContext.fillText("나가기", exitButton.x + exitButton.width * 0.5, exitButton.y + exitButton.height * 0.5);
+		}
+	}
+
+	//==============================================================================
+	// 전투 화면 우주선 출력.
+	//==============================================================================
+	/**
+	 * @param { CanvasRenderingContext2D } canvasRenderingContext
+	 * @param { object } ship
+	 * @param { object } arena
+	 */
+	drawBattleShip(canvasRenderingContext, ship, arena) {
+		const cellSize = arena.cellSize;
+		const shipHalf = arena.shipHalf;
+		const originX = ship.x - shipHalf;
+		const originY = ship.y - shipHalf;
+		const grid = ship.grid;
+
+		for (let column = 0; column < GRID_COLUMNS; ++column) {
+			for (let row = 0; row < GRID_ROWS; ++row) {
+				const partIndex = grid[column][row];
+				if (partIndex === EMPTY_CELL) {
+					continue;
+				}
+				const cellX = originX + column * cellSize;
+				const cellY = originY + row * cellSize;
+				this.drawPart(canvasRenderingContext, partIndex, cellX, cellY, cellSize);
+			}
+		}
+	}
+
+	//==============================================================================
+	// 전투 화면 체력바 출력.
+	//==============================================================================
+	/**
+	 * @param { CanvasRenderingContext2D } canvasRenderingContext
+	 * @param { object } ship
+	 * @param { Vector2 } viewSize
+	 * @param { boolean } isTop
+	 */
+	drawHealthBar(canvasRenderingContext, ship, viewSize, isTop) {
+		const barWidth = viewSize.x * 0.6;
+		const barHeight = System.Math.floor(viewSize.y * 0.012);
+		const barX = (viewSize.x - barWidth) * 0.5;
+		let barY = viewSize.y * 0.86;
+		if (isTop) {
+			barY = viewSize.y * 0.07;
+		}
+
+		// 배경.
+		canvasRenderingContext.fillStyle = "#33384a";
+		canvasRenderingContext.fillRect(barX, barY, barWidth, barHeight);
+
+		// 체력.
+		let healthRatio = ship.health / ship.maxHealth;
+		if (healthRatio < 0) {
+			healthRatio = 0;
+		}
+		let healthColor = "#6ad080";
+		if (isTop) {
+			healthColor = "#ff6a6a";
+		}
+		canvasRenderingContext.fillStyle = healthColor;
+		canvasRenderingContext.fillRect(barX, barY, barWidth * healthRatio, barHeight);
+
+		// 라벨.
+		const displayHealth = System.Math.max(0, System.Math.floor(ship.health));
+		const labelText = `${ship.name}  체력 ${displayHealth}`;
+		canvasRenderingContext.fillStyle = "#ffffff";
+		canvasRenderingContext.font = "24px sans-serif";
+		canvasRenderingContext.textAlign = "center";
+		canvasRenderingContext.textBaseline = "alphabetic";
+		canvasRenderingContext.fillText(labelText, viewSize.x * 0.5, barY - 8);
+	}
 }
 
 
@@ -1383,7 +2279,7 @@ class AppScene extends Scene {
 // 엔진 기동.
 //==============================================================================
 const engineConfiguration = new EngineConfiguration();
-engineConfiguration.referenceResolutionSize = Vector2.create(800, 1280);
+engineConfiguration.referenceResolutionSize = Vector2.create(1080, 1920);
 engineConfiguration.useStatistics = false;
 const engine = new Engine(engineConfiguration);
 document.title = "playablegames-template";
